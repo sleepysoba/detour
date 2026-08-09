@@ -1,0 +1,15 @@
+command:
+  - gunicorn
+  - --config
+  - gunicorn.conf.py
+  - app:app
+
+env:
+  - name: LAKEBASE_SECRET_SCOPE
+    value: "database"
+  - name: LAKEBASE_SECRET_KEY
+    value: "lakebase-url"
+  - name: AUTO_INIT_DB
+    value: "true"
+  - name: LOG_LEVEL
+    value: "INFO"
