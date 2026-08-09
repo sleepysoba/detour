@@ -51,15 +51,24 @@ def load_config() -> dict:
         "LAKEBASE_SECRET_SCOPE": os.getenv("LAKEBASE_SECRET_SCOPE", "database").strip(),
         "LAKEBASE_SECRET_KEY": os.getenv("LAKEBASE_SECRET_KEY", "lakebase-url").strip(),
         "LAKEBASE_CONNECT_TIMEOUT": _positive_int("LAKEBASE_CONNECT_TIMEOUT", 10),
+        "OPEN_METEO_TIMEOUT_SECONDS": _positive_int("OPEN_METEO_TIMEOUT_SECONDS", 10),
+        "WIKIMEDIA_TIMEOUT_SECONDS": _positive_int("WIKIMEDIA_TIMEOUT_SECONDS", 15),
+        "WIKIMEDIA_USER_AGENT": os.getenv(
+            "WIKIMEDIA_USER_AGENT", "DetourCapstone/0.1 (educational project)"
+        ).strip(),
         "DATABRICKS_TOKEN": os.getenv("DATABRICKS_TOKEN", "").strip(),
         "DATABRICKS_AI_BASE_URL": os.getenv("DATABRICKS_AI_BASE_URL", "").strip(),
         "DATABRICKS_CHAT_MODEL": os.getenv(
             "DATABRICKS_CHAT_MODEL", "system.ai.meta-llama-3-3-70b-instruct"
         ).strip(),
+        "DATABRICKS_LLM_TIMEOUT_SECONDS": _positive_int(
+            "DATABRICKS_LLM_TIMEOUT_SECONDS", 120
+        ),
         "EMBEDDING_MODEL": os.getenv(
             "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
         ).strip(),
         "EMBEDDING_DIMENSIONS": embedding_dimensions,
+        "EMBEDDING_THREADS": _positive_int("EMBEDDING_THREADS", 2),
         "LOG_LEVEL": log_level,
         "AUTO_INIT_DB": _boolean("AUTO_INIT_DB", True),
     }
@@ -72,3 +81,12 @@ def configure_logging(level_name: str) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     logging.getLogger().setLevel(getattr(logging, level_name))
+    noisy_loggers = (
+        "httpcore",
+        "httpx",
+        "huggingface_hub",
+        "sentence_transformers",
+        "transformers",
+    )
+    for noisy_logger in noisy_loggers:
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
