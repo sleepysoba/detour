@@ -67,6 +67,91 @@ class AttractionRepository:
             raise LakebaseError("Destination upsert did not return an identifier.")
         return int(row["id"])
 
+    def get_destination(self, destination_id: int) -> dict | None:
+        """Return one destination without exposing database-specific row objects."""
+        sql = """
+            SELECT id, city_key, requested_name, display_name, latitude, longitude,
+                   timezone, last_ingested_at, created_at
+            FROM destinations
+            WHERE id = %s
+        """
+        try:
+            with self._connection(None) as (connection, _):
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, (destination_id,))
+                    row = cursor.fetchone()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not load the destination.") from exc
+        return dict(row) if row else None
+
+    def count_usable_attractions(self, destination_id: int) -> int:
+        """Count attributable, embedded attractions available for retrieval."""
+        sql = """
+            SELECT COUNT(*) AS attraction_count
+            FROM attractions
+            WHERE destination_id = %s
+              AND source_page_id IS NOT NULL
+              AND description <> ''
+              AND embedding IS NOT NULL
+        """
+        try:
+            with self._connection(None) as (connection, _):
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, (destination_id,))
+                    row = cursor.fetchone()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not count destination attractions.") from exc
+        return int(row["attraction_count"]) if row else 0
+
+    def list_attractions(self, destination_id: int, *, limit: int = 30) -> list[dict]:
+        """Return compact stored attraction records for orchestration and diagnostics."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100.")
+        sql = """
+            SELECT id, destination_id, source_page_id, name,
+                   LEFT(description, 1200) AS description, source_url,
+                   latitude, longitude, category, indoor_outdoor,
+                   weather_sensitivity, activity_level,
+                   estimated_duration_minutes, tags, traveler_summary,
+                   embedding_model
+            FROM attractions
+            WHERE destination_id = %s
+            ORDER BY name, id
+            LIMIT %s
+        """
+        try:
+            with self._connection(None) as (connection, _):
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, (destination_id, limit))
+                    rows = cursor.fetchall()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not load destination attractions.") from exc
+        return [_compact_attraction(row) for row in rows]
+
+    def mark_destination_ingested(self, destination_id: int, *, connection: Any | None = None) -> None:
+        """Record a successful ingestion only after attraction persistence succeeds."""
+        try:
+            with self._connection(connection) as (active_connection, owns_connection):
+                with active_connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE destinations SET last_ingested_at = NOW() WHERE id = %s",
+                        (destination_id,),
+                    )
+                    if cursor.rowcount != 1:
+                        raise LakebaseError("Destination ingestion update matched no row.")
+                if owns_connection:
+                    active_connection.commit()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not update destination ingestion state.") from exc
+
     def upsert_attraction(
         self,
         *,
@@ -80,8 +165,10 @@ class AttractionRepository:
         category: str | None,
         indoor_outdoor: str | None,
         weather_sensitivity: float | None,
+        activity_level: str | None,
         estimated_duration_minutes: int | None,
         tags: list[str],
+        traveler_summary: str | None,
         embedding: list[float],
         embedding_model: str,
         connection: Any | None = None,
@@ -92,8 +179,12 @@ class AttractionRepository:
             INSERT INTO attractions (
                 destination_id, source_page_id, name, description, source_url,
                 latitude, longitude, category, indoor_outdoor, weather_sensitivity,
-                estimated_duration_minutes, tags, embedding, embedding_model
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
+                activity_level, estimated_duration_minutes, tags, traveler_summary,
+                embedding, embedding_model
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s::vector, %s
+            )
             ON CONFLICT (destination_id, source_page_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -103,8 +194,10 @@ class AttractionRepository:
                 category = EXCLUDED.category,
                 indoor_outdoor = EXCLUDED.indoor_outdoor,
                 weather_sensitivity = EXCLUDED.weather_sensitivity,
+                activity_level = EXCLUDED.activity_level,
                 estimated_duration_minutes = EXCLUDED.estimated_duration_minutes,
                 tags = EXCLUDED.tags,
+                traveler_summary = EXCLUDED.traveler_summary,
                 embedding = EXCLUDED.embedding,
                 embedding_model = EXCLUDED.embedding_model
             RETURNING id
@@ -120,8 +213,10 @@ class AttractionRepository:
             category,
             indoor_outdoor,
             weather_sensitivity,
+            activity_level,
             estimated_duration_minutes,
             Json(tags),
+            traveler_summary,
             embedding_value,
             embedding_model,
         )
@@ -160,7 +255,11 @@ class AttractionRepository:
                 source_url,
                 category,
                 indoor_outdoor,
+                weather_sensitivity,
+                activity_level,
+                estimated_duration_minutes,
                 tags,
+                traveler_summary,
                 1 - (embedding <=> %s::vector) AS similarity
             FROM attractions
             WHERE destination_id = %s
@@ -180,16 +279,39 @@ class AttractionRepository:
 
         results: list[dict] = []
         for row in rows:
-            results.append(
-                {
-                    "id": int(row["id"]),
-                    "name": row["name"],
-                    "description": row["description"],
-                    "source_url": row.get("source_url"),
-                    "category": row.get("category"),
-                    "indoor_outdoor": row.get("indoor_outdoor"),
-                    "tags": list(row.get("tags") or []),
-                    "similarity": float(row["similarity"]),
-                }
-            )
+            result = _compact_attraction(row)
+            result["similarity"] = float(row["similarity"])
+            results.append(result)
         return results
+
+
+def _compact_attraction(row: dict) -> dict:
+    """Normalize repository rows into safe, JSON-serializable evidence objects."""
+    result = {
+        "id": int(row["id"]),
+        "name": row["name"],
+        "description": row["description"],
+        "source_url": row.get("source_url"),
+        "category": row.get("category"),
+        "indoor_outdoor": row.get("indoor_outdoor"),
+        "tags": list(row.get("tags") or []),
+    }
+    if "weather_sensitivity" in row:
+        result["weather_sensitivity"] = (
+            float(row["weather_sensitivity"])
+            if row.get("weather_sensitivity") is not None
+            else None
+        )
+    for optional_key in (
+        "destination_id",
+        "source_page_id",
+        "latitude",
+        "longitude",
+        "activity_level",
+        "estimated_duration_minutes",
+        "traveler_summary",
+        "embedding_model",
+    ):
+        if optional_key in row:
+            result[optional_key] = row.get(optional_key)
+    return result

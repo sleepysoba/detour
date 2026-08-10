@@ -38,13 +38,20 @@ CREATE TABLE IF NOT EXISTS attractions (
     category TEXT,
     indoor_outdoor TEXT CHECK (indoor_outdoor IN ('indoor', 'outdoor', 'mixed')),
     weather_sensitivity DOUBLE PRECISION CHECK (weather_sensitivity BETWEEN 0.0 AND 1.0),
+    activity_level TEXT CHECK (activity_level IN ('low', 'moderate', 'high')),
     estimated_duration_minutes INTEGER CHECK (estimated_duration_minutes > 0),
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    traveler_summary TEXT,
     embedding VECTOR(384) NOT NULL,
     embedding_model TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (destination_id, source_page_id)
 );
+
+-- Keep initialization idempotent for Phase 0 databases created before the
+-- traveler-facing enrichment fields were added.
+ALTER TABLE attractions ADD COLUMN IF NOT EXISTS activity_level TEXT;
+ALTER TABLE attractions ADD COLUMN IF NOT EXISTS traveler_summary TEXT;
 
 CREATE INDEX IF NOT EXISTS attractions_destination_idx
     ON attractions (destination_id);

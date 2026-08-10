@@ -63,12 +63,199 @@ _BLOCKED_TITLE_PARTS = (
     "jila",
     "school of business",
     "laboratory for",
+    "season",
+    "state highway",
+    "interstate ",
+    "u.s. route",
 )
 _BIOGRAPHY_PATTERN = re.compile(
     r"\b(?:is|was) an? (?:american|canadian|british|australian|german|french|spanish) "
     r"(?:politician|athlete|player|actor|actress|writer|businessman|businesswoman|scientist)\b",
     re.IGNORECASE,
 )
+
+_DESTINATION_BLOCKED_PARTS = (
+    "athletics",
+    "airport",
+    "business school",
+    "elections",
+    "events center",
+    "fieldhouse",
+    "high school",
+    "marathon",
+    "orchestra",
+    "prediction center",
+    "school district",
+    "science institute",
+    "geological society",
+    " station",
+    "sports season",
+    "stadium",
+    "university of",
+    " weekly",
+)
+_DESTINATION_EVENT_PARTS = ("festival", "fest", "race", "championship")
+_STRONG_PLACE_TERMS = {
+    "arboretum",
+    "auditorium",
+    "beach",
+    "building",
+    "canyon",
+    "district",
+    "gallery",
+    "garden",
+    "historic",
+    "landmark",
+    "library",
+    "mall",
+    "market",
+    "memorial",
+    "mountain",
+    "museum",
+    "neighborhood",
+    "observatory",
+    "park",
+    "site",
+    "street",
+    "theater",
+    "theatre",
+    "trail",
+}
+_CLEAR_VISITOR_SIGNALS = (
+    "arboretum",
+    "auditorium",
+    "garden",
+    "historic district",
+    "historic site",
+    "landmark",
+    "market",
+    "museum",
+    "national register of historic places",
+    "observatory",
+    "park",
+    "performing arts",
+    "scenic",
+    "theater",
+    "theatre",
+    "tourist attraction",
+    "visitor attraction",
+    "visitor center",
+)
+_STRONG_CLOSED_INDICATORS = (
+    "closed forever",
+    "permanently closed",
+    "was later demolished",
+    "was demolished",
+    "has been demolished",
+    "demolished in",
+    "no longer exists",
+)
+_ADMINISTRATIVE_FACILITY_INDICATORS = (
+    "district court",
+    "government office",
+    "administrative headquarters",
+    "municipal office",
+    "county offices",
+)
+_ORDINARY_OFFICE_INDICATORS = (
+    "office skyscraper",
+    "office tower",
+    "commercial office building",
+    "contain office space",
+    "contains office space",
+)
+_OPERATIONAL_RESEARCH_INDICATORS = (
+    "federally funded research and development center",
+    "operational facility",
+    "research institute",
+    "research laboratories",
+)
+
+
+def attraction_quality_score(candidate: dict) -> int:
+    """Score obvious place quality without attempting a universal classifier."""
+    title = str(candidate.get("name") or candidate.get("title") or "").casefold()
+    description = str(candidate.get("description") or "").casefold()
+    text = f"{title} {description}"
+    strong_hits = sum(term in text for term in _STRONG_PLACE_TERMS)
+    title_hits = sum(term in title for term in _STRONG_PLACE_TERMS)
+    opening_identity = description.split(".", 1)[0]
+    visitor_scope = f"{title} {opening_identity}"
+    has_visitor_signal = any(
+        re.search(rf"\b{re.escape(signal)}\b", visitor_scope)
+        for signal in _CLEAR_VISITOR_SIGNALS
+    )
+
+    # Strong current-state statements override historical/notability signals.
+    # Words such as "former" or "historic" alone are intentionally insufficient.
+    if any(indicator in description for indicator in _STRONG_CLOSED_INDICATORS):
+        return -12
+    if not has_visitor_signal and any(
+        indicator in text for indicator in _ADMINISTRATIVE_FACILITY_INDICATORS
+    ):
+        return -11
+    if not has_visitor_signal and any(
+        indicator in description[:700] for indicator in _ORDINARY_OFFICE_INDICATORS
+    ):
+        return -10
+    if not has_visitor_signal and any(
+        indicator in description[:700] for indicator in _OPERATIONAL_RESEARCH_INDICATORS
+    ):
+        return -10
+
+    if any(part in title for part in _DESTINATION_BLOCKED_PARTS):
+        # A university museum or university observatory remains a usable place.
+        if not any(
+            term in title
+            for term in ("museum", "gallery", "observatory", "garden", "arboretum", "neighborhood", "district")
+        ):
+            return -10
+    if any(part in title for part in _DESTINATION_EVENT_PARTS) or (
+        any(
+            phrase in description[:220]
+            for phrase in ("annual race", "annual road race", "annual festival", "is an annual 10-")
+        )
+    ):
+        return -8
+    if any(term in description[:220] for term in (" football stadium", "multi-purpose arena")):
+        return -10
+    if any(part in title for part in ("road", "highway", "route ")):
+        return -10
+    if "born" in description[:240] or _BIOGRAPHY_PATTERN.search(description[:400]):
+        return -10
+    if any(
+        phrase in description[:300]
+        for phrase in (
+            "is a private university",
+            "is a public university",
+            "is an organization",
+            "is a city in",
+            "is a home rule city",
+            "is a census-designated place",
+            "is a newspaper",
+        )
+    ):
+        return -8
+
+    score = (title_hits * 5) + min(strong_hits, 5)
+    if candidate.get("distance_m") is not None and float(candidate["distance_m"]) <= 12_000:
+        score += 2
+    if any(term in text for term in ("visitor", "tourist", "scenic", "cultural", "public")):
+        score += 2
+    return score
+
+
+def filter_attraction_candidates(candidates: list[dict], *, limit: int = 25) -> list[dict]:
+    """Prefer actual visitor places and remove clear people/events/administrative noise."""
+    ranked = [candidate for candidate in candidates if attraction_quality_score(candidate) >= 1]
+    ranked.sort(
+        key=lambda item: (
+            -attraction_quality_score(item),
+            float(item.get("distance_m")) if item.get("distance_m") is not None else float("inf"),
+            str(item.get("name") or ""),
+        )
+    )
+    return ranked[:limit]
 
 
 class WikimediaError(RuntimeError):
@@ -170,7 +357,10 @@ class WikimediaService:
         if not 10 <= radius_meters <= 10_000:
             raise WikimediaError("INVALID_ARGUMENT", "radius_meters must be from 10 to 10000.")
 
-        search_limit = min(50, max(limit * 2, 30))
+        # Nearby results are cheap identifiers; use a wider pool before fetching
+        # extracts so arbitrary cities are not dominated by the closest offices,
+        # schools, and sports facilities.
+        search_limit = min(150, max(limit * 5, 75))
         search_payload = self._get_json(
             {
                 "action": "query",
@@ -198,26 +388,75 @@ class WikimediaService:
             raise WikimediaError("MALFORMED_RESPONSE", "Wikimedia nearby results omitted page identifiers.")
 
         city_token = city_name.split(",", 1)[0].strip().casefold()
-        location_terms = " ".join(part.strip() for part in city_name.split(",")[:2])
-        supplemental_payload = self._get_json(
-            {
-                "action": "query",
-                "list": "search",
-                "srsearch": f"{location_terms} attractions",
-                "srlimit": 20,
-                "srnamespace": 0,
-            },
-            "Wikimedia city attraction search",
-        )
-        supplemental_query = supplemental_payload.get("query")
-        supplemental = supplemental_query.get("search") if isinstance(supplemental_query, dict) else None
-        if not isinstance(supplemental, list):
-            raise WikimediaError("MALFORMED_RESPONSE", "Wikimedia city search returned invalid results.")
-        for item in supplemental:
-            if isinstance(item, dict) and item.get("pageid") is not None:
-                discovery_by_id.setdefault(str(item["pageid"]), item)
+        city_parts = [part.strip() for part in city_name.split(",") if part.strip()]
+        category_locations = list(dict.fromkeys([", ".join(city_parts[:2]), city_parts[0]]))
+        category_supplement_failed = False
+        for category_location in category_locations:
+            location_member_count = 0
+            for category_prefix in ("Tourist attractions", "Museums"):
+                try:
+                    supplemental_payload = self._get_json(
+                        {
+                            "action": "query",
+                            "list": "categorymembers",
+                            "cmtitle": f"Category:{category_prefix} in {category_location}",
+                            "cmlimit": 50,
+                            "cmnamespace": 0,
+                        },
+                        "Wikimedia city attraction categories",
+                    )
+                except WikimediaError as exc:
+                    logger.warning(
+                        "wikimedia_category_supplement_unavailable city=%s code=%s",
+                        city_name,
+                        exc.code,
+                    )
+                    category_supplement_failed = True
+                    break
+                supplemental_query = supplemental_payload.get("query")
+                supplemental = (
+                    supplemental_query.get("categorymembers")
+                    if isinstance(supplemental_query, dict)
+                    else None
+                )
+                if not isinstance(supplemental, list):
+                    raise WikimediaError(
+                        "MALFORMED_RESPONSE", "Wikimedia city categories returned invalid results."
+                    )
+                for item in supplemental:
+                    if isinstance(item, dict) and item.get("pageid") is not None:
+                        discovery_by_id.setdefault(str(item["pageid"]), item)
+                        location_member_count += 1
+            if category_supplement_failed or location_member_count:
+                break
+
+        location_terms = " ".join(city_parts[:2])
+        for search_query in (f'"{location_terms}" visitor attraction',):
+            supplemental_payload = self._get_json(
+                {
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": search_query,
+                    "srlimit": 20,
+                    "srnamespace": 0,
+                },
+                "Wikimedia city attraction search",
+            )
+            supplemental_query = supplemental_payload.get("query")
+            supplemental = (
+                supplemental_query.get("search") if isinstance(supplemental_query, dict) else None
+            )
+            if not isinstance(supplemental, list):
+                raise WikimediaError("MALFORMED_RESPONSE", "Wikimedia city search returned invalid results.")
+            for item in supplemental:
+                if isinstance(item, dict) and item.get("pageid") is not None:
+                    discovery_by_id.setdefault(str(item["pageid"]), item)
 
         pages: list[dict] = []
+        discovery_by_title = {
+            str(item.get("title") or "").casefold(): item for item in discovery_by_id.values()
+        }
+        redirect_discovery_by_title: dict[str, dict] = {}
         page_ids = list(discovery_by_id)
         for offset in range(0, len(page_ids), 50):
             detail_payload = self._get_json(
@@ -238,6 +477,15 @@ class WikimediaService:
             detail_pages = detail_query.get("pages") if isinstance(detail_query, dict) else None
             if not isinstance(detail_pages, list):
                 raise WikimediaError("MALFORMED_RESPONSE", "Wikimedia page extracts returned invalid results.")
+            redirects = detail_query.get("redirects") if isinstance(detail_query, dict) else None
+            if isinstance(redirects, list):
+                for redirect in redirects:
+                    if not isinstance(redirect, dict):
+                        continue
+                    source = discovery_by_title.get(str(redirect.get("from") or "").casefold())
+                    target = str(redirect.get("to") or "").casefold()
+                    if source and target:
+                        redirect_discovery_by_title[target] = source
             pages.extend(detail_pages)
 
         candidates: list[dict] = []
@@ -248,7 +496,11 @@ class WikimediaService:
             if not isinstance(page, dict) or page.get("missing") is True:
                 continue
             page_id = str(page.get("pageid") or "")
-            discovery = discovery_by_id.get(page_id)
+            discovery = (
+                discovery_by_id.get(page_id)
+                or discovery_by_title.get(str(page.get("title") or "").casefold())
+                or redirect_discovery_by_title.get(str(page.get("title") or "").casefold())
+            )
             title = page.get("title")
             extract = page.get("extract")
             if not discovery or not isinstance(title, str) or not isinstance(extract, str):
@@ -299,12 +551,17 @@ class WikimediaService:
                 continue
             candidates.append(candidate)
 
-        candidates.sort(key=self._rank)
+        candidates.sort(
+            key=lambda candidate: (
+                -attraction_quality_score(candidate),
+                *self._rank(candidate),
+            )
+        )
         selected = candidates[:limit]
         logger.info(
-            "wikimedia_discovery city=%s nearby=%d usable=%d selected=%d",
+            "wikimedia_discovery city=%s discovered=%d usable=%d selected=%d",
             city_name,
-            len(nearby),
+            len(pages),
             len(candidates),
             len(selected),
         )
