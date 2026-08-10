@@ -5,6 +5,10 @@ command:
   - app:app
 
 env:
+  - name: LAKEBASE_URL
+    valueFrom: lakebase-url
+  - name: DATABRICKS_TOKEN
+    valueFrom: databricks-token
   - name: LAKEBASE_SECRET_SCOPE
     value: "database"
   - name: LAKEBASE_SECRET_KEY

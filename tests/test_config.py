@@ -5,7 +5,9 @@ from detour.config import ConfigError, load_config
 
 def test_config_uses_locked_defaults(monkeypatch):
     for name in (
+        "DATABRICKS_AI_BASE_URL",
         "DATABRICKS_CHAT_MODEL",
+        "DATABRICKS_HOST",
         "EMBEDDING_MODEL",
         "EMBEDDING_DIMENSIONS",
         "AUTO_INIT_DB",
@@ -18,6 +20,31 @@ def test_config_uses_locked_defaults(monkeypatch):
     assert config["EMBEDDING_MODEL"] == "sentence-transformers/all-MiniLM-L6-v2"
     assert config["EMBEDDING_DIMENSIONS"] == 384
     assert config["AUTO_INIT_DB"] is True
+
+
+def test_explicit_databricks_ai_base_url_wins(monkeypatch):
+    explicit_url = "https://explicit.example.com/custom/v1/"
+    monkeypatch.setenv("DATABRICKS_AI_BASE_URL", explicit_url)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://host.example.com")
+
+    assert load_config()["DATABRICKS_AI_BASE_URL"] == explicit_url
+
+
+def test_databricks_host_derives_ai_gateway_url(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_AI_BASE_URL", raising=False)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://dbc-example.cloud.databricks.com/")
+
+    assert (
+        load_config()["DATABRICKS_AI_BASE_URL"]
+        == "https://dbc-example.cloud.databricks.com/ai-gateway/mlflow/v1"
+    )
+
+
+def test_databricks_ai_base_url_empty_without_explicit_url_or_host(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_AI_BASE_URL", raising=False)
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+
+    assert load_config()["DATABRICKS_AI_BASE_URL"] == ""
 
 
 def test_config_parses_false_auto_init(monkeypatch):

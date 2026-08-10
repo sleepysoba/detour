@@ -36,6 +36,17 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _databricks_ai_base_url() -> str:
+    explicit_base_url = os.getenv("DATABRICKS_AI_BASE_URL", "").strip()
+    if explicit_base_url:
+        return explicit_base_url
+
+    databricks_host = os.getenv("DATABRICKS_HOST", "").strip()
+    if databricks_host:
+        return f"{databricks_host.rstrip('/')}/ai-gateway/mlflow/v1"
+    return ""
+
+
 def load_config() -> dict:
     """Load application configuration without printing sensitive values."""
     embedding_dimensions = _positive_int("EMBEDDING_DIMENSIONS", 384)
@@ -57,7 +68,7 @@ def load_config() -> dict:
             "WIKIMEDIA_USER_AGENT", "DetourCapstone/0.1 (educational project)"
         ).strip(),
         "DATABRICKS_TOKEN": os.getenv("DATABRICKS_TOKEN", "").strip(),
-        "DATABRICKS_AI_BASE_URL": os.getenv("DATABRICKS_AI_BASE_URL", "").strip(),
+        "DATABRICKS_AI_BASE_URL": _databricks_ai_base_url(),
         "DATABRICKS_CHAT_MODEL": os.getenv(
             "DATABRICKS_CHAT_MODEL", "system.ai.meta-llama-3-3-70b-instruct"
         ).strip(),
