@@ -30,7 +30,27 @@ def test_explicit_databricks_ai_base_url_wins(monkeypatch):
     assert load_config()["DATABRICKS_AI_BASE_URL"] == explicit_url
 
 
-def test_databricks_host_derives_ai_gateway_url(monkeypatch):
+def test_bare_databricks_host_derives_https_ai_gateway_url(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_AI_BASE_URL", raising=False)
+    monkeypatch.setenv("DATABRICKS_HOST", "dbc-example.cloud.databricks.com")
+
+    assert (
+        load_config()["DATABRICKS_AI_BASE_URL"]
+        == "https://dbc-example.cloud.databricks.com/ai-gateway/mlflow/v1"
+    )
+
+
+def test_https_databricks_host_remains_https(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_AI_BASE_URL", raising=False)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://dbc-example.cloud.databricks.com")
+
+    assert (
+        load_config()["DATABRICKS_AI_BASE_URL"]
+        == "https://dbc-example.cloud.databricks.com/ai-gateway/mlflow/v1"
+    )
+
+
+def test_databricks_host_trailing_slash_is_removed(monkeypatch):
     monkeypatch.delenv("DATABRICKS_AI_BASE_URL", raising=False)
     monkeypatch.setenv("DATABRICKS_HOST", "https://dbc-example.cloud.databricks.com/")
 

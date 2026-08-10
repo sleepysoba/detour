@@ -43,6 +43,8 @@ def _databricks_ai_base_url() -> str:
 
     databricks_host = os.getenv("DATABRICKS_HOST", "").strip()
     if databricks_host:
+        if not databricks_host.lower().startswith(("http://", "https://")):
+            databricks_host = f"https://{databricks_host}"
         return f"{databricks_host.rstrip('/')}/ai-gateway/mlflow/v1"
     return ""
 
