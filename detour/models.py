@@ -100,6 +100,48 @@ class TripRepository:
             raise LakebaseError("Weather snapshot insert returned no identifier.")
         return int(row["id"])
 
+    def get_latest_weather_snapshot(self, trip_id: int) -> dict | None:
+        """Return the newest immutable live provider snapshot for a trip."""
+        sql = """
+            SELECT id, trip_id, provider, forecast_json, air_quality_json,
+                   fetched_at, expires_at
+            FROM weather_snapshots
+            WHERE trip_id = %s
+            ORDER BY fetched_at DESC, id DESC
+            LIMIT 1
+        """
+        try:
+            with get_connection(**self.connection_options) as connection, connection.cursor() as cursor:
+                cursor.execute(sql, (trip_id,))
+                row = cursor.fetchone()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not load the trip weather snapshot.") from exc
+        return dict(row) if row else None
+
+    def update_live_resilience(self, trip_id: int, score: int) -> None:
+        """Persist a deterministic live score, never a simulated scenario score."""
+        if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
+            raise ValueError("Live resilience score must be an integer from 0 to 100.")
+        try:
+            with get_connection(**self.connection_options) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE trips
+                    SET live_resilience_score = %s, updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (score, trip_id),
+                )
+                if cursor.rowcount != 1:
+                    raise LakebaseError("Trip was not found while saving live resilience.")
+                connection.commit()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not save live trip resilience.") from exc
+
     def replace_itinerary(self, *, trip_id: int, items: list[dict]) -> list[int]:
         """Replace a generated itinerary atomically so a retry cannot create duplicates."""
         insert_sql = """
@@ -151,12 +193,14 @@ class TripRepository:
 
     def get_itinerary(self, trip_id: int) -> list[dict]:
         sql = """
-            SELECT id, trip_id, attraction_id, day_date, start_time, end_time,
-                   title, category, indoor_outdoor, weather_sensitivity,
-                   suitability_score, risk_state, risk_reasons, notes, sort_order
-            FROM itinerary_items
-            WHERE trip_id = %s
-            ORDER BY day_date, sort_order, start_time, id
+            SELECT i.id, i.trip_id, i.attraction_id, i.day_date, i.start_time, i.end_time,
+                   i.title, i.category, i.indoor_outdoor, i.weather_sensitivity,
+                   i.suitability_score, i.risk_state, i.risk_reasons, i.notes, i.sort_order,
+                   a.activity_level
+            FROM itinerary_items AS i
+            LEFT JOIN attractions AS a ON a.id = i.attraction_id
+            WHERE i.trip_id = %s
+            ORDER BY i.day_date, i.sort_order, i.start_time, i.id
         """
         try:
             with get_connection(**self.connection_options) as connection, connection.cursor() as cursor:

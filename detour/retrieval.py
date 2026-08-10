@@ -134,6 +134,35 @@ class AttractionRepository:
             raise LakebaseError("Could not load destination attractions.") from exc
         return [_compact_attraction(row) for row in rows]
 
+    def get_attraction(
+        self,
+        attraction_id: int,
+        *,
+        destination_id: int | None = None,
+        connection: Any | None = None,
+    ) -> dict | None:
+        """Load one compact attraction, optionally enforcing destination ownership."""
+        sql = """
+            SELECT id, destination_id, source_page_id, name,
+                   LEFT(description, 1200) AS description, source_url,
+                   latitude, longitude, category, indoor_outdoor,
+                   weather_sensitivity, activity_level,
+                   estimated_duration_minutes, tags, traveler_summary,
+                   embedding_model
+            FROM attractions
+            WHERE id = %s AND (%s IS NULL OR destination_id = %s)
+        """
+        try:
+            with self._connection(connection) as (active_connection, _):
+                with active_connection.cursor() as cursor:
+                    cursor.execute(sql, (attraction_id, destination_id, destination_id))
+                    row = cursor.fetchone()
+        except LakebaseError:
+            raise
+        except Exception as exc:
+            raise LakebaseError("Could not load the attraction.") from exc
+        return _compact_attraction(row) if row else None
+
     def mark_destination_ingested(self, destination_id: int, *, connection: Any | None = None) -> None:
         """Record a successful ingestion only after attraction persistence succeeds."""
         try:

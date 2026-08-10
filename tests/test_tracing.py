@@ -33,3 +33,16 @@ def test_trace_insert_is_parameterized():
     assert "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)" in sql
     assert params[0] == "trace-1"
     assert params[3] == "MODEL_REQUEST"
+
+
+def test_safe_summary_never_keeps_hidden_reasoning_fields():
+    result = safe_summary(
+        {
+            "tool_name": "search_attractions",
+            "reasoning": "private model reasoning",
+            "chain_of_thought": "private",
+            "output": {"count": 8},
+        }
+    )
+
+    assert result == {"tool_name": "search_attractions", "output": {"count": 8}}
