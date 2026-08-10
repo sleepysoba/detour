@@ -1,24 +1,128 @@
 {% extends "base.html" %}
 
-{% block title %}Detour — Resilient travel planning{% endblock %}
+{% block title %}Detour — Plans change. Yours can too.{% endblock %}
+{% block body_class %}landing-page{% endblock %}
 
 {% block content %}
-  <section class="hero" aria-labelledby="hero-title">
-    <p class="eyebrow">Self-healing travel plans</p>
-    <h1 id="hero-title">Build a trip ready for the unexpected.</h1>
-    <p class="hero-copy">
-      Detour turns live conditions into clear itinerary risk, then helps repair
-      vulnerable plans without losing what made the trip yours.
-    </p>
-    <div class="foundation-status" role="status">
-      <span class="status-dot" aria-hidden="true"></span>
-      <span>Foundation online. Trip creation arrives in the next build phase.</span>
+  <section class="landing-hero" aria-labelledby="hero-title">
+    <div class="hero-copy-block">
+      <p class="eyebrow"><span></span> The self-healing travel planner</p>
+      <h1 id="hero-title">Plans change.<br><em>Yours can too.</em></h1>
+      <p class="hero-copy">
+        Detour stress-tests your itinerary against weather and air quality — then
+        repairs the plan when conditions change.
+      </p>
+      <div class="hero-proof" aria-label="How Detour works">
+        <span>01 <strong>Build</strong></span>
+        <i></i>
+        <span>02 <strong>Stress-test</strong></span>
+        <i></i>
+        <span>03 <strong>Repair</strong></span>
+      </div>
+    </div>
+
+    <div class="trip-builder-wrap">
+      <div class="trip-builder">
+        <div class="builder-heading">
+          <div>
+            <p class="section-kicker">Start a journey</p>
+            <h2>Where are you headed?</h2>
+          </div>
+          <span class="live-source"><i></i> Live intelligence</span>
+        </div>
+
+        {% if error %}
+          <div class="inline-alert error-alert" role="alert">
+            <span aria-hidden="true">!</span>
+            <div><strong>We hit a detour.</strong><p>{{ error }}</p></div>
+          </div>
+        {% endif %}
+
+        <form class="trip-form" action="{{ url_for('pages.create_trip') }}" method="post" data-trip-form>
+          <label class="field full-field">
+            <span>Destination</span>
+            <div class="input-shell destination-input">
+              <span aria-hidden="true">⌖</span>
+              <input name="destination" type="text" maxlength="160" required
+                autocomplete="address-level2" placeholder="Boulder, Colorado"
+                value="{{ values.get('destination', '') }}">
+            </div>
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>Arrive</span>
+              <input name="start_date" type="date" required min="{{ default_start }}"
+                value="{{ values.get('start_date', default_start) }}">
+            </label>
+            <label class="field">
+              <span>Depart</span>
+              <input name="end_date" type="date" required min="{{ default_start }}"
+                value="{{ values.get('end_date', default_end) }}">
+            </label>
+          </div>
+
+          <fieldset class="choice-group">
+            <legend>What draws you in?</legend>
+            <div class="chip-grid">
+              {% for preference in preferences %}
+                <label class="choice-chip">
+                  <input type="checkbox" name="preferences" value="{{ preference }}"
+                    {% if preference in values.get('preferences', []) %}checked{% endif %}>
+                  <span>{{ preference }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </fieldset>
+
+          <fieldset class="choice-group pace-group">
+            <legend>Your pace</legend>
+            <div class="segmented-control">
+              {% for pace in ('relaxed', 'balanced', 'packed') %}
+                <label>
+                  <input type="radio" name="pace" value="{{ pace }}"
+                    {% if values.get('pace', 'balanced') == pace %}checked{% endif %}>
+                  <span>{{ pace|title }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </fieldset>
+
+          <button class="primary-button build-button" type="submit">
+            <span>Build my trip</span><span aria-hidden="true">→</span>
+          </button>
+        </form>
+      </div>
     </div>
   </section>
 
-  <section class="story" aria-label="How Detour works">
-    <article><span>01</span><h2>Read the conditions</h2><p>Weather and air quality become explainable trip signals.</p></article>
-    <article><span>02</span><h2>Find the weak spots</h2><p>Each activity receives a transparent resilience assessment.</p></article>
-    <article><span>03</span><h2>Make a better detour</h2><p>You review every proposed change before it reaches your itinerary.</p></article>
+  <section class="presets-section" aria-labelledby="presets-title">
+    <div class="section-heading-row">
+      <div><p class="section-kicker">Or leave now</p><h2 id="presets-title">Curated escapes</h2></div>
+      <p>Real places. Live conditions. Ready to stress-test.</p>
+    </div>
+    <div class="preset-grid">
+      {% for preset in presets %}
+        <button class="preset-card preset-{{ loop.index }}" type="button"
+          data-preset data-destination="{{ preset.destination }}"
+          data-preferences='{{ preset.preferences|tojson }}' data-pace="{{ preset.pace }}">
+          <span class="preset-number">0{{ loop.index }}</span>
+          <span class="preset-copy"><strong>{{ preset.name }}{% if preset.recommended %}<em class="preset-badge">Recommended</em>{% endif %}</strong><small>{{ preset.label }}</small></span>
+          <span class="preset-arrow" aria-hidden="true">↗</span>
+        </button>
+      {% endfor %}
+    </div>
   </section>
+
+  <p class="legacy-proof">Build a trip ready for the unexpected.</p>
+{% endblock %}
+
+{% block overlays %}
+  <div class="loading-screen" data-create-loader hidden role="status" aria-live="polite">
+    <div class="loading-orbit"><span>D</span></div>
+    <p class="section-kicker">Building your Detour</p>
+    <h2 data-loading-stage>Finding real places...</h2>
+    <p>This can take a moment for a new city. We’re using live sources, not a canned itinerary.</p>
+    <div class="loading-bar"><i></i></div>
+  </div>
 {% endblock %}

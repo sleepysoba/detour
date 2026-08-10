@@ -17,6 +17,15 @@ class TripValidationError(ValueError):
     """Raised before network or persistence work for invalid trip input."""
 
 
+def live_conditions_available(
+    start_date: date, end_date: date, *, today: date | None = None
+) -> bool:
+    """Return whether the complete trip fits inside Open-Meteo's live window."""
+    current_day = today or date.today()
+    last_forecast_day = current_day + timedelta(days=MAX_FORECAST_DAYS - 1)
+    return start_date >= current_day and end_date <= last_forecast_day
+
+
 def validate_trip_input(
     *,
     destination: str,
@@ -41,11 +50,7 @@ def validate_trip_input(
         raise TripValidationError("Trips must be from 1 to 5 days long.")
     if start < current_day:
         raise TripValidationError("Trip start date cannot be in the past.")
-    last_forecast_day = current_day + timedelta(days=MAX_FORECAST_DAYS - 1)
-    if end > last_forecast_day:
-        raise TripValidationError(
-            f"Trip dates must stay within the live forecast window ending {last_forecast_day.isoformat()}."
-        )
+    has_live_conditions = live_conditions_available(start, end, today=current_day)
 
     normalized_pace = (pace or "").strip().casefold()
     if normalized_pace not in VALID_PACES:
@@ -67,7 +72,8 @@ def validate_trip_input(
         "preferences": normalized_preferences,
         "pace": normalized_pace,
         "duration_days": duration_days,
-        "forecast_days": (end - current_day).days + 1,
+        "forecast_days": (end - current_day).days + 1 if has_live_conditions else None,
+        "live_conditions_available": has_live_conditions,
     }
 
 

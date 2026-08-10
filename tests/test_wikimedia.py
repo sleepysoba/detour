@@ -165,3 +165,13 @@ def test_destination_filter_preserves_clear_visitor_places_despite_borderline_wo
     assert {row["name"] for row in filter_attraction_candidates(candidates)} == {
         row["name"] for row in candidates
     }
+
+
+@pytest.mark.parametrize("closure_text", ["now closed", "closed permanently"])
+def test_destination_filter_excludes_obvious_permanent_closure_text(closure_text):
+    candidate = {
+        "name": "Harbor Art Museum",
+        "description": f"A public museum and visitor attraction that is {closure_text}.",
+    }
+
+    assert filter_attraction_candidates([candidate]) == []

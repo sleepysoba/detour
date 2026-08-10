@@ -20,6 +20,7 @@ def test_trip_validation_accepts_live_five_day_trip_and_normalizes_preferences()
 
     assert result["duration_days"] == 5
     assert result["forecast_days"] == 6
+    assert result["live_conditions_available"] is True
     assert result["preferences"] == ["culture", "photography"]
     assert result["pace"] == "balanced"
 
@@ -29,7 +30,6 @@ def test_trip_validation_accepts_live_five_day_trip_and_normalizes_preferences()
     [
         ("2026-08-08", "2026-08-09", "past"),
         ("2026-08-09", "2026-08-14", "1 to 5"),
-        ("2026-08-14", "2026-08-16", "forecast window"),
         ("2026-08-11", "2026-08-10", "1 to 5"),
     ],
 )
@@ -55,3 +55,18 @@ def test_trip_validation_rejects_unknown_pace():
             pace="rushed",
             today=TODAY,
         )
+
+
+def test_trip_validation_accepts_future_trip_outside_forecast_window():
+    result = validate_trip_input(
+        destination="Boulder, Colorado",
+        start_date="2026-09-10",
+        end_date="2026-09-13",
+        preferences=["Culture"],
+        pace="balanced",
+        today=TODAY,
+    )
+
+    assert result["live_conditions_available"] is False
+    assert result["forecast_days"] is None
+    assert result["duration_days"] == 4

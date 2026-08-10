@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block title %}{{ dashboard.trip.destination_name }} — Detour{% endblock %}
+{% block body_class %}dashboard-page{% endblock %}
+{% block header_context %}
+  <div class="trip-header-context">
+    <span>{{ dashboard.trip.destination_name }}</span>
+    <i></i>
+    <span>{{ dashboard.trip.start_date }} — {{ dashboard.trip.end_date }}</span>
+  </div>
+  <a class="text-button" href="{{ url_for('pages.index') }}">New trip <span>↗</span></a>
+{% endblock %}
+
+{% block content %}
+  <script type="application/json" id="dashboard-data">{{ dashboard|tojson }}</script>
+
+  {% if dashboard.applied %}
+    <section class="applied-banner" role="status">
+      <div class="success-mark">✓</div>
+      <div>
+        <p class="section-kicker">Detour applied</p>
+        <h2>Your repaired itinerary is saved.</h2>
+        <p>
+          Resilience under {{ dashboard.applied.scenario|replace('_', ' ')|title }}:
+          {{ dashboard.applied.resilience_before }} → {{ dashboard.active.score }}.
+          {{ dashboard.active.vulnerable_activity_count }} vulnerabilities remain.
+        </p>
+      </div>
+      <button class="secondary-button compact" data-trace-id="{{ dashboard.applied.trace_id }}" data-open-trace>View agent trace</button>
+    </section>
+  {% endif %}
+
+  <section class="trip-intro">
+    <div>
+      <p class="eyebrow"><span></span> Your adaptive itinerary</p>
+      <h1>{{ dashboard.trip.destination_name }}</h1>
+      <p>{{ dashboard.trip.preferences|join(' · ') }} <span>—</span> {{ dashboard.trip.pace|title }} pace</p>
+    </div>
+    <div class="condition-mode {% if not dashboard.live_conditions_available %}is-planning{% elif dashboard.active.simulated %}is-simulated{% endif %}" data-condition-mode>
+      <span class="mode-dot"></span>
+      <div><small data-mode-kicker>{% if not dashboard.live_conditions_available %}FUTURE TRIP{% elif dashboard.active.simulated %}SIMULATED SCENARIO{% else %}CURRENT SIGNAL{% endif %}</small>
+        <strong data-mode-label>{% if not dashboard.live_conditions_available %}PLANNING MODE{% elif dashboard.active.simulated %}SIMULATED: {{ dashboard.scenario|replace('_', ' ') }}{% else %}LIVE CONDITIONS{% endif %}</strong>
+      </div>
+    </div>
+  </section>
+
+  {% if dashboard.live_conditions_available %}
+  <section class="weather-strip" aria-label="Trip weather">
+    {% for day in dashboard.weather_days %}
+      <article class="weather-day">
+        <div><strong>{{ day.day_label }}</strong><span>{{ day.date_label }}</span></div>
+        <span class="weather-icon" aria-hidden="true">{{ day.icon }}</span>
+        <div class="temperature"><strong>{{ day.high if day.high is not none else '—' }}°</strong><span>{{ day.low if day.low is not none else '—' }}°</span></div>
+        <div class="weather-facts">
+          <span><i class="rain-drop"></i>{{ day.rain if day.rain is not none else '—' }}% rain</span>
+          <span class="aqi-pill {% if day.aqi and day.aqi > 100 %}is-poor{% endif %}">AQI {{ day.aqi if day.aqi is not none else '—' }}</span>
+        </div>
+      </article>
+    {% else %}
+      <div class="weather-empty">Live forecast details are unavailable; resilience uses the latest saved conditions.</div>
+    {% endfor %}
+  </section>
+  {% else %}
+    <section class="planning-banner" aria-label="Planning mode">
+      <span class="planning-icon" aria-hidden="true">◇</span>
+      <div>
+        <p class="section-kicker">Planning mode</p>
+        <h2>Live resilience unlocks closer to departure.</h2>
+        <p>Weather and air-quality forecasts are not available for these dates yet. Your itinerary is saved and ready for live evaluation closer to the trip.</p>
+      </div>
+    </section>
+  {% endif %}
+
+  <div class="dashboard-grid">
+    <section class="itinerary-panel" aria-labelledby="itinerary-title">
+      <div class="section-heading-row compact-heading">
+        <div><p class="section-kicker">The plan</p><h2 id="itinerary-title">Your itinerary</h2></div>
+        <span class="activity-count">{{ dashboard.item_count }} activities</span>
+      </div>
+
+      <div data-itinerary-days>
+        {% for day in dashboard.days %}
+          <section class="itinerary-day">
+            <header><span>{{ '%02d'|format(loop.index) }}</span><div><strong>{{ day.weekday }}</strong><small>{{ day.date_label }}</small></div></header>
+            <div class="timeline">
+              {% for item in day['items'] %}
+                {% set evaluation = item.evaluation %}
+                <article class="activity-card {% if dashboard.live_conditions_available %}status-{{ evaluation.status|lower|replace('_', '-') }} {% if evaluation.vulnerable %}is-vulnerable{% endif %}{% else %}status-planning{% endif %}"
+                  data-item-id="{{ item.id }}">
+                  <div class="timeline-time"><strong>{{ item.start_time }}</strong><span>{{ item.end_time }}</span></div>
+                  <div class="activity-body">
+                    <div class="activity-title-row">
+                      <div><h3>{{ item.title }}</h3><p>{{ item.notes or 'A real destination attraction selected for this trip.' }}</p></div>
+                      {% if dashboard.live_conditions_available %}
+                        <div class="score-badge"><strong data-item-score>{{ evaluation.condition_score }}</strong><span>/100</span></div>
+                      {% else %}
+                        <div class="planning-score">Planning</div>
+                      {% endif %}
+                    </div>
+                    <div class="activity-meta">
+                      <span>{{ item.category or 'Attraction' }}</span>
+                      <span>{{ item.indoor_outdoor|title }}</span>
+                      {% if dashboard.live_conditions_available %}<span class="risk-state" data-item-status>{{ evaluation.status|replace('_', ' ') }}</span>{% endif %}
+                    </div>
+                    {% if dashboard.live_conditions_available %}
+                      <div class="risk-reasons" data-item-reasons {% if evaluation.status == 'GO' %}hidden{% endif %}>
+                        {% for reason in evaluation.primary_risk_factors %}<span>{{ reason }}</span>{% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          </section>
+        {% endfor %}
+      </div>
+    </section>
+
+    <aside class="intelligence-panel">
+      <div class="intelligence-card">
+        <p class="section-kicker">Detour intelligence</p>
+        {% if dashboard.live_conditions_available %}
+        <div class="resilience-heading"><h2>Trip resilience</h2><span data-resilience-label>{{ dashboard.active.label }}</span></div>
+        <div class="resilience-display">
+          <div class="score-ring" style="--score: {{ dashboard.active.score }}" data-score-ring>
+            <div><strong data-resilience-score>{{ dashboard.active.score }}</strong><span>/ 100</span></div>
+          </div>
+          <div class="resilience-copy">
+            <strong data-vulnerability-count>{{ dashboard.active.vulnerable_activity_count }} {{ 'vulnerability' if dashboard.active.vulnerable_activity_count == 1 else 'vulnerabilities' }}</strong>
+            <p data-resilience-summary>{{ dashboard.active.summary }}</p>
+          </div>
+        </div>
+
+        <div class="comparison-panel" data-comparison {% if not dashboard.active.simulated %}hidden{% endif %}>
+          <div><span>Live resilience</span><strong>{{ dashboard.live.score }}</strong></div>
+          <span class="comparison-arrow">→</span>
+          <div><span>Simulated resilience</span><strong data-simulated-score>{{ dashboard.active.score }}</strong></div>
+        </div>
+
+        <button class="primary-button repair-button" type="button" data-repair
+          {% if dashboard.active.vulnerable_activity_count == 0 %}disabled{% endif %}>
+          <span data-repair-label>{{ 'Repair my trip' if dashboard.active.vulnerable_activity_count else 'No repair needed' }}</span><span aria-hidden="true">↗</span>
+        </button>
+        <p class="button-note">Every proposed change is yours to review.</p>
+        {% else %}
+          <div class="planning-intelligence">
+            <span class="planning-lock" aria-hidden="true">◇</span>
+            <h2>Planning mode</h2>
+            <p>No live resilience score is shown until supported weather and air-quality forecasts become available.</p>
+          </div>
+          <button class="primary-button repair-button" type="button" data-repair disabled>
+            <span data-repair-label>Available closer to departure</span>
+          </button>
+        {% endif %}
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-heading"><div><p class="section-kicker">Scenario lab</p><h2>Stress-test the plan</h2></div><span>SIMULATION</span></div>
+        <p>{% if dashboard.live_conditions_available %}See how the same itinerary holds up when conditions shift.{% else %}Scenario Lab needs a real forecast baseline and will unlock closer to departure.{% endif %}</p>
+        <div class="scenario-controls" role="group" aria-label="Trip scenario">
+          <button class="scenario-button {% if dashboard.scenario == 'LIVE' and dashboard.live_conditions_available %}is-active{% endif %}" data-scenario="LIVE" {% if not dashboard.live_conditions_available %}disabled{% endif %}><span>◉</span>Live conditions</button>
+          <button class="scenario-button {% if dashboard.scenario == 'RAINSTORM' %}is-active{% endif %}" data-scenario="RAINSTORM" {% if not dashboard.live_conditions_available %}disabled{% endif %}><span>☂</span>Rainstorm</button>
+          <button class="scenario-button {% if dashboard.scenario == 'HEATWAVE' %}is-active{% endif %}" data-scenario="HEATWAVE" {% if not dashboard.live_conditions_available %}disabled{% endif %}><span>☀</span>Heatwave</button>
+          <button class="scenario-button {% if dashboard.scenario == 'POOR_AQI' %}is-active{% endif %}" data-scenario="POOR_AQI" {% if not dashboard.live_conditions_available %}disabled{% endif %}><span>≈</span>Poor AQI</button>
+        </div>
+        <p class="simulation-note"><span>i</span> {% if dashboard.live_conditions_available %}Simulations never overwrite your live forecast.{% else %}No long-range conditions are fabricated.{% endif %}</p>
+      </div>
+
+      <div class="ask-card">
+        <p class="section-kicker">Ask Detour</p>
+        <h2>Curious about the plan?</h2>
+        <form data-ask-form>
+          <textarea name="question" rows="2" maxlength="500" placeholder="{% if dashboard.live_conditions_available %}Why is Tuesday afternoon at risk?{% else %}Live condition questions unlock closer to departure.{% endif %}" required {% if not dashboard.live_conditions_available %}disabled{% endif %}></textarea>
+          <button type="submit" aria-label="Send question" {% if not dashboard.live_conditions_available %}disabled{% endif %}>→</button>
+        </form>
+        <div class="ask-response" data-ask-response hidden></div>
+        <p class="ask-note">Read-only guidance. Changes always require a review.</p>
+      </div>
+    </aside>
+  </div>
+{% endblock %}
+
+{% block overlays %}
+  <div class="modal-backdrop" data-repair-modal hidden>
+    <section class="repair-modal" role="dialog" aria-modal="true" aria-labelledby="repair-modal-title">
+      <button class="modal-close" type="button" data-close-repair aria-label="Close proposal">×</button>
+      <div data-repair-progress>
+        <div class="repair-orbit"><span>D</span><i></i></div>
+        <p class="section-kicker">Repair in progress</p>
+        <h2 id="repair-modal-title">Detour is reworking the weak spots.</h2>
+        <p>The real repair agent is comparing your itinerary with saved conditions and destination alternatives.</p>
+        <ol class="progress-stages">
+          <li class="is-active">Inspecting the trip</li>
+          <li>Evaluating vulnerable activities</li>
+          <li>Searching safer alternatives</li>
+          <li>Building the smallest useful repair</li>
+        </ol>
+      </div>
+      <div data-repair-result hidden></div>
+    </section>
+  </div>
+
+  <div class="drawer-backdrop" data-trace-drawer hidden>
+    <aside class="trace-drawer" role="dialog" aria-modal="true" aria-labelledby="trace-title">
+      <button class="modal-close" type="button" data-close-trace aria-label="Close trace">×</button>
+      <p class="section-kicker">Observable actions only</p>
+      <h2 id="trace-title">Agent trace</h2>
+      <div data-trace-content class="trace-content"><div class="mini-loader"></div></div>
+    </aside>
+  </div>
+
+  <div class="toast" data-toast hidden role="status"></div>
+{% endblock %}

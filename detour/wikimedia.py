@@ -143,7 +143,9 @@ _CLEAR_VISITOR_SIGNALS = (
 )
 _STRONG_CLOSED_INDICATORS = (
     "closed forever",
+    "now closed",
     "permanently closed",
+    "closed permanently",
     "was later demolished",
     "was demolished",
     "has been demolished",

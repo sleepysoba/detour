@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from detour.destination import AttractionSearchService
@@ -15,6 +15,7 @@ from detour.models import TripRepository
 from detour.retrieval import AttractionRepository
 from detour.scoring import evaluate_activity_conditions
 from detour.tracing import TraceService
+from detour.trips import live_conditions_available
 from detour.weather import OpenMeteoError, OpenMeteoService
 from detour.wikimedia import filter_attraction_candidates
 
@@ -173,6 +174,7 @@ class ItineraryService:
         weather: OpenMeteoService,
         llm: LLMService,
         traces: TraceService | None = None,
+        today_provider: Callable[[], date] = date.today,
     ):
         self.trips = trips
         self.attractions = attractions
@@ -180,6 +182,7 @@ class ItineraryService:
         self.weather = weather
         self.llm = llm
         self.traces = traces
+        self.today_provider = today_provider
 
     def _record(self, *, trace_id: str, trip_id: int, **event: Any) -> None:
         if self.traces:
@@ -196,13 +199,12 @@ class ItineraryService:
         trip: dict,
         candidates: list[dict],
         slots: list[dict[str, str]],
-        slot_scores: dict[tuple[int, str, str], dict],
+        slot_scores: dict[tuple[int, str, str], dict] | None,
         trace_id: str,
     ) -> tuple[list[dict], bool]:
         candidate_payload = []
         for candidate in candidates:
-            candidate_payload.append(
-                {
+            candidate_row = {
                     "id": candidate["id"],
                     "name": candidate["name"],
                     "category": candidate.get("category"),
@@ -210,21 +212,23 @@ class ItineraryService:
                     "activity_level": candidate.get("activity_level"),
                     "tags": candidate.get("tags") or [],
                     "summary": candidate.get("traveler_summary") or candidate.get("description", "")[:240],
-                    "slot_condition_scores": {
+                }
+            if slot_scores is not None:
+                candidate_row["slot_condition_scores"] = {
                         f"{slot['day_date']} {slot['start_time']}": slot_scores[
                             (candidate["id"], slot["day_date"], slot["start_time"])
                         ]["score"]
                         for slot in slots
-                    },
-                }
-            )
+                    }
+            candidate_payload.append(candidate_row)
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Build an itinerary using only supplied attraction IDs and every supplied schedule slot. "
                     "Use each attraction at most once. Preserve slot dates/times exactly. Prefer the traveler's "
-                    "preferences, variety, and higher deterministic condition scores. Never invent or rename "
+                    "preferences and variety. When deterministic condition scores are supplied, prefer higher "
+                    "scores. Never invent or rename "
                     "an attraction. Return JSON only as {\"items\":[{\"attraction_id\":1," 
                     "\"day_date\":\"YYYY-MM-DD\",\"start_time\":\"HH:MM\"}]}."
                 ),
@@ -287,14 +291,18 @@ class ItineraryService:
     def _fallback_selection(
         candidates: list[dict],
         slots: list[dict[str, str]],
-        slot_scores: dict[tuple[int, str, str], dict],
+        slot_scores: dict[tuple[int, str, str], dict] | None,
     ) -> list[dict]:
         unused = {int(candidate["id"]): candidate for candidate in candidates}
         used_categories: dict[str, int] = {}
         selection: list[dict] = []
         for slot in slots:
             def rank(candidate: dict) -> tuple[float, float]:
-                score = slot_scores[(candidate["id"], slot["day_date"], slot["start_time"])]["score"]
+                score = (
+                    slot_scores[(candidate["id"], slot["day_date"], slot["start_time"])]["score"]
+                    if slot_scores is not None
+                    else 0
+                )
                 category_penalty = used_categories.get(str(candidate.get("category")), 0) * 5
                 similarity = float(candidate.get("similarity") or 0)
                 return score - category_penalty, similarity
@@ -347,37 +355,41 @@ class ItineraryService:
                 pace=trip["pace"],
                 candidate_count=len(candidates),
             )
-            forecast_days = (end - date.today()).days + 1
-            forecast = self.weather.get_forecast(
-                trip["latitude"], trip["longitude"], forecast_days=forecast_days
-            )
-            try:
-                air_quality = self.weather.get_air_quality(
+            today = self.today_provider()
+            has_live_conditions = live_conditions_available(start, end, today=today)
+            snapshot_id = None
+            slot_scores = None
+            if has_live_conditions:
+                forecast_days = (end - today).days + 1
+                forecast = self.weather.get_forecast(
                     trip["latitude"], trip["longitude"], forecast_days=forecast_days
                 )
-            except OpenMeteoError as exc:
-                logger.warning("air_quality_unavailable trip_id=%d code=%s", trip_id, exc.code)
-                air_quality = None
-            snapshot_id = self.trips.save_weather_snapshot(
-                trip_id=trip_id, forecast=forecast, air_quality=air_quality
-            )
-
-            slot_conditions = {
-                (slot["day_date"], slot["start_time"]): conditions_for_slot(
-                    forecast,
-                    air_quality,
-                    day_date=slot["day_date"],
-                    start_time=slot["start_time"],
+                try:
+                    air_quality = self.weather.get_air_quality(
+                        trip["latitude"], trip["longitude"], forecast_days=forecast_days
+                    )
+                except OpenMeteoError as exc:
+                    logger.warning("air_quality_unavailable trip_id=%d code=%s", trip_id, exc.code)
+                    air_quality = None
+                snapshot_id = self.trips.save_weather_snapshot(
+                    trip_id=trip_id, forecast=forecast, air_quality=air_quality
                 )
-                for slot in slots
-            }
-            slot_scores = {
-                (candidate["id"], slot["day_date"], slot["start_time"]): evaluate_activity_conditions(
-                    candidate, slot_conditions[(slot["day_date"], slot["start_time"])]
-                )
-                for candidate in candidates
-                for slot in slots
-            }
+                slot_conditions = {
+                    (slot["day_date"], slot["start_time"]): conditions_for_slot(
+                        forecast,
+                        air_quality,
+                        day_date=slot["day_date"],
+                        start_time=slot["start_time"],
+                    )
+                    for slot in slots
+                }
+                slot_scores = {
+                    (candidate["id"], slot["day_date"], slot["start_time"]): evaluate_activity_conditions(
+                        candidate, slot_conditions[(slot["day_date"], slot["start_time"])]
+                    )
+                    for candidate in candidates
+                    for slot in slots
+                }
             selection, used_fallback = self._model_selection(
                 trip=trip,
                 candidates=candidates,
@@ -389,9 +401,11 @@ class ItineraryService:
             items: list[dict] = []
             for sort_order, selected in enumerate(selection):
                 candidate = candidates_by_id[selected["attraction_id"]]
-                score = slot_scores[
-                    (candidate["id"], selected["day_date"], selected["start_time"])
-                ]
+                score = (
+                    slot_scores[(candidate["id"], selected["day_date"], selected["start_time"])]
+                    if slot_scores is not None
+                    else None
+                )
                 start_at = datetime.combine(
                     date.fromisoformat(selected["day_date"]),
                     time.fromisoformat(selected["start_time"]),
@@ -408,12 +422,12 @@ class ItineraryService:
                         "category": candidate.get("category"),
                         "indoor_outdoor": candidate.get("indoor_outdoor") or "mixed",
                         "weather_sensitivity": float(candidate.get("weather_sensitivity") or 0.5),
-                        "suitability_score": score["score"],
-                        "risk_state": score["state"],
-                        "risk_reasons": score["reasons"],
+                        "suitability_score": score["score"] if score else None,
+                        "risk_state": score["state"] if score else None,
+                        "risk_reasons": score["reasons"] if score else [],
                         "notes": candidate.get("traveler_summary"),
                         "sort_order": sort_order,
-                        "condition_signals": score["signals"],
+                        "condition_signals": score["signals"] if score else None,
                     }
                 )
             item_ids = self.trips.replace_itinerary(trip_id=trip_id, items=items)
@@ -424,7 +438,12 @@ class ItineraryService:
                 trip_id=trip_id,
                 event_type="ITINERARY_GENERATED",
                 status="ok",
-                output_summary={"item_count": len(items), "deterministic_fallback": used_fallback, "snapshot_id": snapshot_id},
+                output_summary={
+                    "item_count": len(items),
+                    "deterministic_fallback": used_fallback,
+                    "snapshot_id": snapshot_id,
+                    "live_conditions_available": has_live_conditions,
+                },
             )
             self._record(
                 trace_id=trace_id,
@@ -438,6 +457,7 @@ class ItineraryService:
                 "trip": trip,
                 "items": items,
                 "weather_snapshot_id": snapshot_id,
+                "live_conditions_available": has_live_conditions,
                 "used_deterministic_fallback": used_fallback,
             }
         except Exception as exc:

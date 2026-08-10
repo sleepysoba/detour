@@ -3,16 +3,24 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Detour is a self-healing travel planner.">
+    <meta name="description" content="Detour is the self-healing travel planner.">
+    <meta name="theme-color" content="#f4f1ea">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
     <title>{% block title %}Detour{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
     <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
   </head>
-  <body>
+  <body class="{% block body_class %}{% endblock %}">
     <header class="site-header">
-      <a class="brand" href="{{ url_for('pages.index') }}" aria-label="Detour home">Detour</a>
-      <span class="tagline">Plans change. Yours can too.</span>
+      <a class="brand" href="{{ url_for('pages.index') }}" aria-label="Detour home">
+        <span class="brand-mark" aria-hidden="true">D</span>
+        <span>DETOUR</span>
+      </a>
+      {% block header_context %}
+        <span class="tagline">Self-healing travel intelligence</span>
+      {% endblock %}
     </header>
     <main>{% block content %}{% endblock %}</main>
+    {% block overlays %}{% endblock %}
   </body>
 </html>

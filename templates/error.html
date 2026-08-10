@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — Detour{% endblock %}
+{% block body_class %}error-page{% endblock %}
+{% block content %}
+  <section class="error-state">
+    <span class="error-code">A scenic route, unexpectedly.</span>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <a class="primary-button" href="{{ url_for('pages.index') }}">Plan a new trip <span>→</span></a>
+  </section>
+{% endblock %}
